@@ -12,6 +12,8 @@ https://github.com/floooh/sokol/blob/master/sokol_audio.h
 #define COBJMACROS
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#define _USE_MATH_DEFINES
+#include <math.h>
 
 void error_box(char *msg){
     MessageBoxA(0,msg,"Error",MB_ICONERROR);
@@ -61,6 +63,45 @@ static PROC getProc(char *procName){
 	return proc;
 }
 
+static const GUID _CLSID_MMDeviceEnumerator = {0xbcde0395, 0xe52f, 0x467c, {0x8e,0x3d, 0xc4,0x57,0x92,0x91,0x69,0x2e}};
+static const GUID _IID_IMMDeviceEnumerator = {0xa95664d2, 0x9614, 0x4f35, {0xa7,0x46, 0xde,0x8d,0xb6,0x36,0x17,0xe6}};
+static const GUID _IID_IAudioClient = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1,0x78, 0xc2,0xf5,0x68,0xa7,0x03,0xb2}};
+static const GUID _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT = {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+static const GUID _IID_IAudioRenderClient = {0xf294acfc, 0x3146, 0x4483, {0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2}};
+static IMMDeviceEnumerator *enu = NULL;
+static IMMDevice *dev = NULL;
+static IAudioClient *client = NULL;
+static IAudioRenderClient* renderClient = NULL;
+static void fill_audio_buffer(void){
+    UINT32 total;
+    UINT32 padding;
+    if (FAILED(client->lpVtbl->GetBufferSize(client, &total))){
+        fatal_error("Failed to get WASAPI buffer size.");
+    }
+    if (FAILED(client->lpVtbl->GetCurrentPadding(client, &padding))){
+        fatal_error("Failed to get WASAPI padding.");
+    }
+    UINT32 remaining = total - padding;
+    if (remaining){
+        struct Sample {
+            float left;
+            float right;
+        } *samples;
+        if (FAILED(renderClient->lpVtbl->GetBuffer(renderClient, remaining, (BYTE **)&samples))){
+            fatal_error("WASAPI says frames are available, but won't let us fuckin' have 'em.");
+        }
+        static double t = 0.0;
+        for (UINT32 i = 0; i < remaining; i++){
+            samples[i].left = 0.25*sin(t);
+            samples[i].right = samples[i].left;
+            t += 0.1;
+        }
+		if (FAILED(renderClient->lpVtbl->ReleaseBuffer(renderClient,remaining,0))){
+			fatal_error("Failed to release WASAPI buffer.");
+		}
+    }
+}
+
 static LRESULT CALLBACK wndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam){
 	HDC dc = GetDC(hWnd);
 	switch (message){
@@ -87,6 +128,7 @@ static LRESULT CALLBACK wndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
 			}
 			update_proc((double)(t1.QuadPart-t0.QuadPart)/(double)freq.QuadPart);
 			t0 = t1;
+            fill_audio_buffer();
 			SwapBuffers(dc);
 			return 0;
 		}
@@ -99,29 +141,6 @@ static LRESULT CALLBACK wndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
 			break;
 	}
 	return DefWindowProcA(hWnd, message, wParam, lParam);
-}
-
-
-static void fill_audio_buffer(void){
-    
-}
-static HANDLE audioThread;
-static DWORD WINAPI audio_thread_proc(_In_ LPVOID lpParameter){
-    _saudio_wasapi_submit_buffer(_saudio.backend.thread.src_buffer_frames);
-    IAudioClient_Start(_saudio.backend.audio_client);
-    while (!_saudio.backend.thread.stop) {
-        WaitForSingleObject(_saudio.backend.thread.buffer_end_event, INFINITE);
-        UINT32 padding = 0;
-        if (FAILED(IAudioClient_GetCurrentPadding(_saudio.backend.audio_client, &padding))) {
-            continue;
-        }
-        SOKOL_ASSERT(_saudio.backend.thread.dst_buffer_frames >= padding);
-        int num_frames = (int)_saudio.backend.thread.dst_buffer_frames - (int)padding;
-        if (num_frames > 0) {
-            _saudio_wasapi_submit_buffer(num_frames);
-        }
-    }
-    return 0;
 }
 
 void create_window(char *title, int width, int height){
@@ -239,20 +258,7 @@ void create_window(char *title, int width, int height){
 	gladLoadGL();
 
     //init audio:
-    const GUID _CLSID_MMDeviceEnumerator = {0xbcde0395, 0xe52f, 0x467c, {0x8e,0x3d, 0xc4,0x57,0x92,0x91,0x69,0x2e}};
-	const GUID _IID_IMMDeviceEnumerator = {0xa95664d2, 0x9614, 0x4f35, {0xa7,0x46, 0xde,0x8d,0xb6,0x36,0x17,0xe6}};
-    const GUID _IID_IAudioClient = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1,0x78, 0xc2,0xf5,0x68,0xa7,0x03,0xb2}};
-    const GUID _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT = {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
-    const GUID _IID_IAudioRenderClient = {0xf294acfc, 0x3146, 0x4483, {0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2}};
-    IMMDeviceEnumerator *enu = NULL;
-    IMMDevice *dev = NULL;
-    IAudioClient *client = NULL;
-    IAudioRenderClient* renderClient = NULL;
-    CoInitializeEx(0, COINIT_MULTITHREADED);
-    HANDLE endEvent = CreateEventA(0, FALSE, FALSE, 0);
-    if (!endEvent){
-        fatal_error("Failed to create audio end event.");
-    }
+    CoInitializeEx(0, 0);
 	if (FAILED(CoCreateInstance(&_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &_IID_IMMDeviceEnumerator, (void**)&enu))){
         fatal_error("Failed to create WASAPI device enumerator.");
     }
@@ -277,24 +283,17 @@ void create_window(char *title, int width, int height){
     if (FAILED(client->lpVtbl->Initialize(
         client,
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
         dur, 0, (WAVEFORMATEX*)&fmtex, 0))){
         fatal_error("Failed to initialize WASAPI audio client.");
-    }
-    UINT32 bufferFrames;
-    if (FAILED(client->lpVtbl->GetBufferSize(client, &bufferFrames))){
-        fatal_error("Failed to get WASAPI buffer size.");
     }
     if (FAILED(client->lpVtbl->GetService(client, &_IID_IAudioRenderClient, (void**)&renderClient))){
         fatal_error("Failed to get WASAPI render client.");
     }
-    if (FAILED(client->lpVtbl->SetEventHandle(client,endEvent))){
-        fatal_error("Failed to set WASAPI event handle.");
-    }
-    audioThread = CreateThread(0,0,audio_thread_proc,0,0,0);
-    if (!audioThread){
-        fatal_error("Failed to create audio thread.");
-    }
+    fill_audio_buffer();
+	if (FAILED(client->lpVtbl->Start(client))){
+		fatal_error("Failed to start WASAPI audio client.");
+	}
 
     //show window:
     ShowWindow(window,SW_SHOWDEFAULT);
