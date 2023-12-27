@@ -1,6 +1,7 @@
 #pragma once
 
-#include <miniglad.h>
+#include <t33/base.h>
+#include <t33/miniglad.h>
 #include <stdbool.h>
 
 /*
@@ -52,10 +53,8 @@ int main(int argc, char **argv);
 User defined function that receives the time since last frame.
 When this function returns, t33 calls SwapBuffers to blit the window
 contents to the screen.
-Returning true closes the window and causes create_window to return.
-Returning false does nothing.
 */
-bool update_proc(double delta_time);
+void update_proc(double delta_time);
 
 /*
 User defined function called whenever the user presses or releases a key.

@@ -7,8 +7,6 @@
 #include <stdarg.h>
 #include <string.h>
 
-#include <error_box.h>
-
 #undef near //fuck deez macros lol
 #undef far
 #undef min
@@ -23,6 +21,8 @@
 #define TSTRUCT(name)\
 typedef struct name name;\
 struct name
+
+void error_box(char *msg);
 
 void fatal_error(char *format, ...);
 

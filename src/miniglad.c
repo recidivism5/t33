@@ -19,6 +19,7 @@
 #include <string.h>
 #include <t33/miniglad.h>
 static void* get_proc(const char *namez);
+int gladLoadGLLoader(GLADloadproc load);
 #if defined(_WIN32) || defined(__CYGWIN__)
 #ifndef _WINDOWS_
 #undef APIENTRY

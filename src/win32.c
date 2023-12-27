@@ -1,15 +1,21 @@
 /*
-Adapted from Vitali Baumtrok's work here:
+Window code adapted from Vitali Baumtrok's work here:
 https://github.com/vbsw/opengl-win32-example/blob/3.0/Main.cpp
+
+Audio code adapted from floooh's work here:
+https://github.com/floooh/sokol/blob/master/sokol_audio.h
 */
-
-#if _WIN32
-
-#include <t33/window.h>
-#include <t33/base.h>
+#include <t33/t33.h>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#define COBJMACROS
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+
+void error_box(char *msg){
+    MessageBoxA(0,msg,"Error",MB_ICONERROR);
+}
 
 /* copied from wglext.h */
 typedef BOOL(WINAPI * PFNWGLCHOOSEPIXELFORMATARBPROC) (HDC hdc, const int *piAttribIList, const FLOAT *pfAttribFList, UINT nMaxFormats, int *piFormats, UINT *nNumFormats);
@@ -36,14 +42,6 @@ typedef BOOL(WINAPI * PFNWGLSWAPINTERVALEXTPROC) (int interval);
 #define WGL_SWAP_COPY_ARB                 0x2029
 
 static PFNWGLSWAPINTERVALEXTPROC wglSwapIntervalEXT = NULL;
-
-static char *get_formatted_error(void){
-	char buf[256];
-	FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-		NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), 
-		buf, (sizeof(buf) / sizeof(char)), NULL);
-	return buf;
-}
 
 #ifndef _CONSOLE
 int APIENTRY WinMain(
@@ -103,7 +101,31 @@ static LRESULT CALLBACK wndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
 	return DefWindowProcA(hWnd, message, wParam, lParam);
 }
 
+
+static void fill_audio_buffer(void){
+    
+}
+static HANDLE audioThread;
+static DWORD WINAPI audio_thread_proc(_In_ LPVOID lpParameter){
+    _saudio_wasapi_submit_buffer(_saudio.backend.thread.src_buffer_frames);
+    IAudioClient_Start(_saudio.backend.audio_client);
+    while (!_saudio.backend.thread.stop) {
+        WaitForSingleObject(_saudio.backend.thread.buffer_end_event, INFINITE);
+        UINT32 padding = 0;
+        if (FAILED(IAudioClient_GetCurrentPadding(_saudio.backend.audio_client, &padding))) {
+            continue;
+        }
+        SOKOL_ASSERT(_saudio.backend.thread.dst_buffer_frames >= padding);
+        int num_frames = (int)_saudio.backend.thread.dst_buffer_frames - (int)padding;
+        if (num_frames > 0) {
+            _saudio_wasapi_submit_buffer(num_frames);
+        }
+    }
+    return 0;
+}
+
 void create_window(char *title, int width, int height){
+    //init window:
 	char *className = "t33";
 	HINSTANCE instance = GetModuleHandleA(NULL);
 	WNDCLASSEXA wcex = {
@@ -121,11 +143,11 @@ void create_window(char *title, int width, int height){
 		.hIconSm = NULL,
 	};
 	if (!RegisterClassExA(&wcex)){
-		fatal_error("Failed to register window class: %s",get_formatted_error());
+		fatal_error("Failed to register window class.");
 	}
 	HWND fakeWindow = CreateWindowExA(0,className,"fakeWindow",WS_OVERLAPPEDWINDOW,0,0,1,1,NULL,NULL,instance,NULL);
 	if (!fakeWindow){
-		fatal_error("Failed to make fake window: %s",get_formatted_error());
+		fatal_error("Failed to make fake window.");
 	}
 	HDC fakeDC = GetDC(fakeWindow);
 	if (!fakeDC){
@@ -215,7 +237,67 @@ void create_window(char *title, int width, int height){
 	wglMakeCurrent(dc,rc);
 	wglSwapIntervalEXT(1);//enable vsync
 	gladLoadGL();
-	ShowWindow(window,SW_SHOWDEFAULT);
+
+    //init audio:
+    const GUID _CLSID_MMDeviceEnumerator = {0xbcde0395, 0xe52f, 0x467c, {0x8e,0x3d, 0xc4,0x57,0x92,0x91,0x69,0x2e}};
+	const GUID _IID_IMMDeviceEnumerator = {0xa95664d2, 0x9614, 0x4f35, {0xa7,0x46, 0xde,0x8d,0xb6,0x36,0x17,0xe6}};
+    const GUID _IID_IAudioClient = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1,0x78, 0xc2,0xf5,0x68,0xa7,0x03,0xb2}};
+    const GUID _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT = {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+    const GUID _IID_IAudioRenderClient = {0xf294acfc, 0x3146, 0x4483, {0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2}};
+    IMMDeviceEnumerator *enu = NULL;
+    IMMDevice *dev = NULL;
+    IAudioClient *client = NULL;
+    IAudioRenderClient* renderClient = NULL;
+    CoInitializeEx(0, COINIT_MULTITHREADED);
+    HANDLE endEvent = CreateEventA(0, FALSE, FALSE, 0);
+    if (!endEvent){
+        fatal_error("Failed to create audio end event.");
+    }
+	if (FAILED(CoCreateInstance(&_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &_IID_IMMDeviceEnumerator, (void**)&enu))){
+        fatal_error("Failed to create WASAPI device enumerator.");
+    }
+    if (FAILED(enu->lpVtbl->GetDefaultAudioEndpoint(enu, eRender, eConsole, &dev))){
+        fatal_error("Failed to get WASAPI default device.");
+    }
+    if (FAILED(dev->lpVtbl->Activate(dev, &_IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&client))){
+        fatal_error("Failed to activate WASAPI default device.");
+    }
+    WAVEFORMATEXTENSIBLE fmtex = {0};
+    fmtex.Format.nChannels = 2;
+    fmtex.Format.nSamplesPerSec = 44100;
+    fmtex.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    fmtex.Format.wBitsPerSample = 32;
+    fmtex.Format.nBlockAlign = (fmtex.Format.nChannels * fmtex.Format.wBitsPerSample) / 8;
+    fmtex.Format.nAvgBytesPerSec = fmtex.Format.nSamplesPerSec * fmtex.Format.nBlockAlign;
+    fmtex.Format.cbSize = 22;   /* WORD + DWORD + GUID */
+    fmtex.Samples.wValidBitsPerSample = 32;
+    fmtex.dwChannelMask = SPEAKER_FRONT_LEFT|SPEAKER_FRONT_RIGHT;
+    fmtex.SubFormat = _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+    REFERENCE_TIME dur = (REFERENCE_TIME)(((double)2048) / (((double)fmtex.Format.nSamplesPerSec) * (1.0/10000000.0)));
+    if (FAILED(client->lpVtbl->Initialize(
+        client,
+        AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        dur, 0, (WAVEFORMATEX*)&fmtex, 0))){
+        fatal_error("Failed to initialize WASAPI audio client.");
+    }
+    UINT32 bufferFrames;
+    if (FAILED(client->lpVtbl->GetBufferSize(client, &bufferFrames))){
+        fatal_error("Failed to get WASAPI buffer size.");
+    }
+    if (FAILED(client->lpVtbl->GetService(client, &_IID_IAudioRenderClient, (void**)&renderClient))){
+        fatal_error("Failed to get WASAPI render client.");
+    }
+    if (FAILED(client->lpVtbl->SetEventHandle(client,endEvent))){
+        fatal_error("Failed to set WASAPI event handle.");
+    }
+    audioThread = CreateThread(0,0,audio_thread_proc,0,0,0);
+    if (!audioThread){
+        fatal_error("Failed to create audio thread.");
+    }
+
+    //show window:
+    ShowWindow(window,SW_SHOWDEFAULT);
 }
 
 void start_main_loop(void){
@@ -225,5 +307,3 @@ void start_main_loop(void){
 		DispatchMessageA(&msg);
 	}
 }
-
-#endif
