@@ -1,8 +1,10 @@
 #pragma once
 
 #include <t33/base.h>
+#include <t33/linalg.h>
 #include <t33/miniglad.h>
-#include <stdbool.h>
+#include <t33/qoa.h>
+#include <t33/qoi.h>
 
 /*
 Put all shaders into a hash table. User calls use_shader("colorNormal"); for instance.
@@ -32,7 +34,7 @@ Does not return until update_proc returns true.
 */
 void start_main_loop(void);
 
-/************************** USER DEFINED FUNCTIONS: *****************
+/************************** USER DEFINED FUNCTIONS: you MUST define these *****************
 I could have done callbacks for these but that would mean
     1. More code
     2. More state
@@ -73,7 +75,7 @@ void mouse_scroll_proc(int scroll_amount);
 
 /*
 User defined function called whenever the mouse moves.
-If the cursor is disabled, x and y are relative values,
+If the cursor is disabled, x and y are delta values,
 otherwise, they are absolute coordinates relative to the top left
 of the window.
 */

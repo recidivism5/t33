@@ -12,8 +12,6 @@ https://github.com/floooh/sokol/blob/master/sokol_audio.h
 #define COBJMACROS
 #include <mmdeviceapi.h>
 #include <audioclient.h>
-#define _USE_MATH_DEFINES
-#include <math.h>
 
 void error_box(char *msg){
     MessageBoxA(0,msg,"Error",MB_ICONERROR);
