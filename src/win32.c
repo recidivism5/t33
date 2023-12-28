@@ -258,7 +258,9 @@ void create_window(char *title, int width, int height){
 	gladLoadGL();
 
     //init audio:
-    CoInitializeEx(0, 0);
+	if (FAILED(CoInitializeEx(0, 0))){
+		fatal_error("CoInitializeEx failed.");
+	}
 	if (FAILED(CoCreateInstance(&_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &_IID_IMMDeviceEnumerator, (void**)&enu))){
         fatal_error("Failed to create WASAPI device enumerator.");
     }
@@ -290,7 +292,6 @@ void create_window(char *title, int width, int height){
     if (FAILED(client->lpVtbl->GetService(client, &_IID_IAudioRenderClient, (void**)&renderClient))){
         fatal_error("Failed to get WASAPI render client.");
     }
-    fill_audio_buffer();
 	if (FAILED(client->lpVtbl->Start(client))){
 		fatal_error("Failed to start WASAPI audio client.");
 	}
